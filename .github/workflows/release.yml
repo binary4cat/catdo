@@ -35,10 +35,11 @@ jobs:
             archive: catdo-linux-arm64.tar.gz
             binary: catdo
           - name: macos-x64
-            os: macos-13
+            os: macos-14
             target: x86_64-apple-darwin
             archive: catdo-macos-x64.tar.gz
             binary: catdo
+            rustflags: "-C link-arg=-arch -C link-arg=x86_64"
           - name: macos-arm64
             os: macos-14
             target: aarch64-apple-darwin
@@ -77,6 +78,7 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --locked --target "${{ matrix.target }}"
 
       - name: Package archive
