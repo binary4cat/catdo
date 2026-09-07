@@ -8,7 +8,7 @@
 
 - Rust + Axum 后端，Svelte 5 + TypeScript 前端
 - 单机本地运行，启动后自动打开浏览器
-- Markdown 所见即所得编辑器（Milkdown Crepe）
+- 新建空笔记使用 Milkdown Crepe；已有 Markdown 使用原文编辑模式，避免 Obsidian 语法、换行和列表格式被自动重写
 - `[[WikiLink]]` 双链补全、跳转和自动创建
 - 文件树、文件搜索、多标签页和 Zen 沉浸模式
 - 明暗主题切换
@@ -100,6 +100,10 @@ vault/
 配置可以在界面中读取和保存，也可以直接编辑 Vault 下的 `.catdo/config.json`。
 
 ## 界面功能
+
+### Markdown 原文模式
+
+已有 Markdown 文件会直接以原文模式打开。打开文件不会触发保存或格式化；编辑时只写入用户实际输入的内容，并尽量保持原文件的换行格式、Frontmatter、Callout、Dataview、嵌入和其他 Obsidian 语法。
 
 ### WikiLink
 

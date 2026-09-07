@@ -60,6 +60,14 @@
   let staleDraftContent = $state<string | null>(null);
   let staleDraftBaseVersion = $state<string | null>(null);
   let forcedInitialContent: string | null = null;
+  let rawEditor: HTMLTextAreaElement | undefined;
+  let rawMode = $state(false);
+  let rawContent = $state('');
+  let sourceMode = false;
+  let editorDirty = false;
+  let richEditor: HTMLElement | null = null;
+  let sourceEol: '\n' | '\r\n' = '\n';
+  let suppressChanges = false;
   function getAssetDir(filePath: string): string {
     const parts = filePath.split('/');
     parts.pop(); // remove filename
@@ -71,6 +79,29 @@
     const now = new Date();
     const pad = (n: number) => n.toString().padStart(2, '0');
     return `Pasted_image_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
+  }
+  function shouldUseSourceMode(content: string): boolean {
+    // Existing Markdown is edited as source so Obsidian formatting, line
+    // endings, frontmatter, and plugin syntax remain byte-stable until the
+    // user explicitly changes the file.
+    return content.length > 0;
+  }
+
+  function toSourceEol(content: string): string {
+    return sourceEol === '\r\n' ? content.replace(/\r?\n/g, '\r\n') : content.replace(/\r\n/g, '\n');
+  }
+  function handleRichInput() {
+    if (!suppressChanges) editorDirty = true;
+  }
+
+  function attachRichEditor() {
+    richEditor = editorHost?.querySelector<HTMLElement>('[contenteditable="true"]') ?? null;
+    richEditor?.addEventListener('input', handleRichInput);
+  }
+
+  function detachRichEditor() {
+    richEditor?.removeEventListener('input', handleRichInput);
+    richEditor = null;
   }
 
   async function uploadImage(file: File): Promise<string> {
@@ -103,6 +134,17 @@
 
   async function insertUploadedImage(file: File) {
     const assetRef = await uploadImage(file);
+    editorDirty = true;
+    if (sourceMode && rawEditor) {
+      const start = rawEditor.selectionStart;
+      const end = rawEditor.selectionEnd;
+      const insertion = `![](${assetRef})`;
+      rawContent = `${rawContent.slice(0, start)}${insertion}${rawContent.slice(end)}`;
+      rawEditor.focus();
+      rawEditor.setSelectionRange(start + insertion.length, start + insertion.length);
+      scheduleSave(rawContent);
+      return;
+    }
     if (!crepe) return;
 
     crepe.editor.action((ctx) => {
@@ -126,6 +168,21 @@
     event.stopPropagation();
     void insertUploadedImage(file);
   }
+  function handleRawInput(event: Event) {
+    editorDirty = true;
+    rawContent = (event.currentTarget as HTMLTextAreaElement).value;
+    scheduleSave(rawContent);
+  }
+
+  function handlePaste(event: ClipboardEvent) {
+    if (!sourceMode) return;
+    const file = Array.from(event.clipboardData?.files ?? []).find((candidate) =>
+      candidate.type.startsWith('image/'),
+    );
+    if (!file) return;
+    event.preventDefault();
+    void insertUploadedImage(file);
+  }
 
   function isCurrent(token: number) {
     return mounted && !disposed && token === loadGeneration;
@@ -140,8 +197,9 @@
   }
 
   function scheduleSave(content: string) {
-    if (!editorReady || loadedVersion === null || disposed) return;
-    const normalized = normalizeMarkdown(content);
+    if (!editorReady || loadedVersion === null || disposed || suppressChanges) return;
+    if (!sourceMode && !editorDirty) return;
+    const normalized = toSourceEol(sourceMode ? content : normalizeMarkdown(content));
     if (draftConflict) staleDraftContent = normalized;
     const baseVersion = draftConflict
       ? staleDraftBaseVersion ?? loadedVersion
@@ -286,6 +344,8 @@
     loadError = null;
     cachedContent = null;
     editorReady = false;
+    editorDirty = false;
+    detachRichEditor();
     loadedVersion = null;
     saveBlocked = false;
     pendingSave = null;
@@ -293,6 +353,11 @@
     draftConflict = false;
     staleDraftContent = null;
     staleDraftBaseVersion = null;
+    rawMode = false;
+    rawContent = '';
+    sourceMode = false;
+    sourceEol = '\n';
+    suppressChanges = true;
     try {
       const fileData = await fetchFile(path);
       if (!isCurrent(token)) return;
@@ -301,6 +366,7 @@
       forcedInitialContent = null;
       const draft = await loadDraft(path);
       let initialContent = forcedContent ?? fileData.content;
+      let recoveredDraft = false;
       if (
         forcedContent === null &&
         draft &&
@@ -309,6 +375,7 @@
       ) {
         if (draft.baseVersion === fileData.version) {
           initialContent = draft.content;
+          recoveredDraft = true;
           toast.info('Recovered unsaved changes from previous session');
         } else {
           initialContent = draft.content;
@@ -321,15 +388,35 @@
       } else if (forcedContent === null && draft) {
         await deleteDraft(path).catch(() => undefined);
       }
+      const useSourceMode = shouldUseSourceMode(fileData.content) || shouldUseSourceMode(initialContent);
+      sourceMode = useSourceMode;
+      sourceEol = fileData.content.includes('\r\n') ? '\r\n' : '\n';
       const editorContent = initialContent.replace(/\r\n?/g, '\n');
+      rawContent = useSourceMode ? editorContent : '';
+      const persistInitialContent = !draftConflict
+        && (forcedContent !== null || recoveredDraft)
+        && editorContent !== fileData.content;
 
       currentContent = initialContent;
       lastSavedContent = fileData.content;
       loadedVersion = fileData.version;
       cacheFileContent(fileData);
-      editorHost.replaceChildren();
+      editorHost?.replaceChildren();
+      if (useSourceMode) {
+        rawMode = true;
+        editorReady = true;
+        suppressChanges = false;
+        loading = false;
+        if (persistInitialContent) {
+          editorDirty = true;
+          scheduleSave(rawContent);
+        }
+        return;
+      }
 
+      suppressChanges = true;
       crepe = new Crepe({
+        root: editorHost,
         defaultValue: editorContent,
         featureConfigs: {
           [Crepe.Feature.ImageBlock]: {
@@ -394,14 +481,21 @@
         crepe = null;
         return;
       }
+      attachRichEditor();
       editorReady = true;
-      loading = false;
-      // A stale conflict draft stays local-only until the user chooses recovery.
-      if (editorContent !== fileData.content && !draftConflict) {
+      suppressChanges = false;
+      if (persistInitialContent) {
+        editorDirty = true;
         scheduleSave(editorContent);
       }
+      loading = false;
+      // Existing files are never saved merely because the editor serialized them.
     } catch (error) {
       if (!isCurrent(token)) return;
+      suppressChanges = false;
+      rawMode = false;
+      rawContent = '';
+      sourceMode = false;
       console.error('Failed to init editor:', error);
       if (crepe) {
         try {
@@ -411,7 +505,7 @@
         }
         crepe = null;
       }
-      editorHost.replaceChildren();
+      editorHost?.replaceChildren();
       cachedContent = getCachedFileContent(path)?.content ?? null;
       loadError = 'Unable to open this file safely. No changes were written.';
       loading = false;
@@ -419,9 +513,16 @@
     }
   }
 
-  // Handle path changes: destroy and recreate.
   function captureEditorContent() {
-    if (!editorReady || loadedVersion === null || !crepe || saveBlocked) return;
+    if (!editorReady || loadedVersion === null || saveBlocked) return;
+    if (sourceMode) {
+      const raw = rawEditor?.value ?? rawContent;
+      if (raw === lastSavedContent.replace(/\r\n?/g, '\n')) return;
+      currentContent = raw;
+      scheduleSave(raw);
+      return;
+    }
+    if (!crepe) return;
     let serialized: string | null = null;
     try {
       crepe.editor.action((ctx) => {
@@ -433,8 +534,8 @@
       return;
     }
     if (serialized === null) return;
-    const normalized = normalizeMarkdown(serialized);
-    if (normalized === normalizeMarkdown(lastSavedContent)) return;
+    const normalized = toSourceEol(normalizeMarkdown(serialized));
+    if (normalized === lastSavedContent) return;
     currentContent = serialized;
     pendingSave = { content: normalized, token: loadGeneration, revision: ++editRevision };
     markTabModified(path, true);
@@ -462,19 +563,23 @@
       if (saveInFlight) teardownSave = true;
       else void flushPendingSave(true);
     }
+    detachRichEditor();
     editorReady = false;
+    suppressChanges = true;
     ++loadGeneration;
     if (crepe) {
       crepe.destroy();
       crepe = null;
     }
+    rawMode = false;
+    rawContent = '';
+    sourceMode = false;
   }
-
   $effect(() => {
     if (path !== currentPath) {
       currentPath = path;
       stopEditor();
-      if (editorHost) void initEditor();
+      void initEditor();
     }
   });
 
@@ -507,10 +612,8 @@
     document.addEventListener('drop', handleDrop, true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('beforeunload', handleBeforeUnload);
-    if (!crepe && editorHost) {
-      currentPath = path;
-      void initEditor();
-    }
+    currentPath = path;
+    void initEditor();
   });
 
   onDestroy(() => {
@@ -526,6 +629,7 @@
     window.removeEventListener('beforeunload', handleBeforeUnload);
     if (saveTimer !== null) window.clearTimeout(saveTimer);
     saveTimer = null;
+    detachRichEditor();
     editorReady = false;
     ++loadGeneration;
     if (crepe) {
@@ -543,7 +647,19 @@
       <button class="rounded border px-2 py-1" onclick={() => void discardLocalDraft()}>放弃本地草稿，使用磁盘版本</button>
     </div>
   {/if}
-  <div class="editor-host h-full" bind:this={editorHost}></div>
+  {#if rawMode}
+    <textarea
+      class="raw-markdown-editor"
+      bind:this={rawEditor}
+      bind:value={rawContent}
+      oninput={handleRawInput}
+      onpaste={handlePaste}
+      aria-label={`Edit ${path}`}
+      spellcheck="false"
+    ></textarea>
+  {:else}
+    <div class="editor-host h-full" bind:this={editorHost}></div>
+  {/if}
   {#if loading}
     <div class="editor-load-status">
       Loading…
