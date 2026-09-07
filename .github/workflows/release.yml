@@ -84,12 +84,15 @@ jobs:
       - name: Package archive
         shell: bash
         run: |
-          mkdir -p artifacts
+          rm -rf staging artifacts
+          mkdir -p staging artifacts
           binary="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          cp "$binary" "staging/${{ matrix.binary }}"
+          cp README.md LICENSE staging/
           if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a -tzip "artifacts/${{ matrix.archive }}" "$binary"
+            (cd staging && 7z a -tzip "../artifacts/${{ matrix.archive }}" *)
           else
-            tar -C "$(dirname "$binary")" -czf "artifacts/${{ matrix.archive }}" "$(basename "$binary")"
+            (cd staging && tar -czf "../artifacts/${{ matrix.archive }}" *)
           fi
 
       - name: Upload archive
