@@ -23,7 +23,7 @@
 
 ### 下载 Release
 
-从 [GitHub Releases](https://github.com/binary4cat/catdo/releases/tag/v0.1.1) 下载对应平台的压缩包：
+从 [GitHub Releases](https://github.com/binary4cat/catdo/releases/tag/v0.1.2) 下载对应平台的压缩包：
 
 | 平台 | 文件 |
 | --- | --- |
@@ -216,8 +216,8 @@ npx tsc --noEmit
 推送符合 `v*.*.*` 格式的标签后，工作流会构建 Windows x64、Linux x64、Linux ARM64、macOS x64 和 macOS ARM64，并创建 GitHub Release：
 
 ```bash
-git tag -a v0.1.1 -m "catdo v0.1.1"
-git push origin v0.1.1
+git tag -a v0.1.2 -m "catdo v0.1.2"
+git push origin v0.1.2
 ```
 
 ## 许可证
